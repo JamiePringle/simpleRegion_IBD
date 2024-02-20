@@ -1,0 +1,224 @@
+from pylab import *
+from numpy import *
+import zarr
+import numcodecs
+from collections import defaultdict,Counter
+#import makeConnectivityModule as mcm
+import time
+import shutil
+import os
+import pickle
+import bisect
+import cartopy.crs as ccrs
+import cartopy
+from cartopy import geodesic
+import shapely
+import time
+import multiprocessing as mp
+import averageLatLon_withWeighted as avll
+#import matplotlib.pyplot as plt, mpld3 #mpld3 does not seem to work with cartopy
+
+#plot forward paths of lineages, Assuming a growth rate of R per
+#generation, and that each habitat can hold 1 adult. NOTE! THIS
+#ASSUMES R NEW POTENTIAL RECRUITS THAT MAKE IT BACK TO THE COAST.
+R=2
+ 
+
+#what habitat, depth and months
+inMonths=arange(6,8+1) #John Wares months
+inMonths=arange(4,6+1) #spring
+#inMonths=arange(4,4+1) #April debug
+#inMonths=arange(10,12+1) #winter
+depth=1
+minPLD=16; maxPLD=minPLD
+vertBehavior='fixed'
+
+if True:
+    habitatName='all_the_americas'
+    lonMin=-100.0; lonMax=-61.63
+    latMin=11.0; latMax=46.5
+    figsize=array([7.28, 7.  ])
+    regionPoly=[(lonMin,latMin),(lonMin,latMax),(lonMax,latMax),(lonMax,latMin)]
+else:
+    assert False,'must choose some habitat extent...'
+
+#get the connect file from directory above
+rootFileName='_%s_depth%d_minPLD%d_maxPLD%d_months%d_to_%d.zarr'%(habitatName,
+                                                                  depth,minPLD,maxPLD,
+                                                                  amin(inMonths),amax(inMonths))
+connectFileName='../../../newJebModelRetentionZones/transposes/E'+rootFileName
+E=zarr.open(connectFileName,'r')
+
+#get habitat file
+habitatFile='/Users/pringle/OSNmountPoint/communityConnectivityMatrices/allPoints/1m/habitat.pckle'
+goodHabitat=pickle.load(open(habitatFile,'rb'))
+
+#get list of plots to point. this will be culled below to only those in E
+
+points2list=[
+    #Laurentian Channel region
+    # (2700, 2187),(2701, 2198),(2708, 2193),(2710, 2184),(2692, 2192),(2685, 2199),(2716, 2159),
+    # (2707, 2148),(2699, 2122),(2692, 2123),(2683, 2129),(2675, 2139),(2657, 2170),(2665, 2168),
+    # (2674, 2170),(2682, 2177),(2681, 2186),(2675, 2191),(2666, 2193),(2656, 2191),(2647, 2188),
+    # (2637, 2184),(2627, 2178),(2621, 2173),(2613, 2163),(2605, 2161),(2612, 2168),(2618, 2177),
+    # (2625, 2186),(2634, 2193),(2644, 2195),(2649, 2201),(2657, 2210),(2669, 2212),(2680, 2210),
+    # (2690, 2210),(2700, 2209),(2708, 2207),(2717, 2205),(2729, 2204),(2740, 2208),(2749, 2216),
+    # (2758, 2222),(2766, 2225),(2775, 2224),(2772, 2216),(2766, 2206),(2762, 2198),(2756, 2188),
+    # (2750, 2178),(2746, 2169),(2739, 2161),(2743, 2153),(2752, 2152),(2759, 2151),(2765, 2151),
+    # (2773, 2151),(2789, 2150),(2780, 2146),(2774, 2143),(2775, 2134),(2783, 2136),
+
+    #SS, GoM, MAB,SAB
+    #(2677, 2161),(2683, 2148),(2690, 2138),(2704, 2136),(2708, 2123),(2717, 2137),(2726, 2142),
+    (2729, 2129),(2720, 2117),(2709, 2110),(2700, 2106),(2691, 2103),(2680, 2100),(2676, 2095),
+    (2669, 2089),(2662, 2083),(2654, 2089),(2655, 2100),(2663, 2109),(2669, 2120),(2658, 2114),
+    (2651, 2113),(2642, 2105),(2635, 2103),(2627, 2100),(2617, 2094),(2610, 2091),(2604, 2086),
+    (2599, 2077),(2597, 2066),(2608, 2058),(2606, 2049),(2599, 2049),(2590, 2050),(2583, 2043),
+    (2575, 2040),(2567, 2037),(2557, 2025),(2551, 2015),(2543, 1998),(2538, 1988),(2534, 1976),
+    (2536, 1960),(2531, 1946),(2524, 1941),(2513, 1937),(2505, 1930),(2495, 1923),(2487, 1914),
+    (2477, 1905),(2469, 1893),(2467, 1879),(2472, 1863),(2478, 1851),(2481, 1836),(2482, 1820),
+    (2478, 1806),
+
+    #GOM
+    (2469, 1807),(2465, 1816),(2459, 1824),(2452, 1834),(2449, 1846),(2451, 1858),(2444, 1864),
+    (2437, 1872),(2429, 1870),(2418, 1868),(2410, 1876),(2399, 1877),(2389, 1878),(2380, 1877),
+    (2372, 1877),(2370, 1870),(2373, 1864),(2373, 1858),(2365, 1864),(2358, 1863),(2347, 1862),
+    (2341, 1868),(2333, 1866),(2324, 1869),(2314, 1867),(2305, 1862),(2297, 1857),(2289, 1852),
+    (2281, 1845),(2276, 1836),(2276, 1827),(2278, 1816),(2275, 1807),(2272, 1798),(2271, 1787),
+    (2271, 1777),(2271, 1765),(2276, 1757),(2278, 1748),(2284, 1740),(2288, 1731),(2295, 1724),
+    (2302, 1722),(2319, 1719),(2335, 1722),(2328, 1720),(2343, 1722),(2349, 1727),(2354, 1734),
+    (2357, 1743),(2359, 1752),(2367, 1756),(2377, 1758),(2387, 1760),(2395, 1760),(2402, 1755),
+    #(2400, 1747),
+    (2396, 1743),(2393, 1735), (2393, 1728), (2391, 1720),(2384, 1720),(2386, 1714),
+    (2385, 1706),(2384, 1700),(2382, 1693),(2378, 1690),(2383, 1686),(2393, 1687),(2404, 1687),
+    (2414, 1689),(2422, 1688),(2430, 1687),(2436, 1683),(2443, 1678),(2446, 1669),(2442, 1661),
+    (2442, 1653),(2442, 1645),(2439, 1636),(2439, 1626),(2443, 1619),
+
+    # #Coasta Rica to 2S
+    # (2449, 1613),(2456, 1608),(2463, 1604),(2474, 1602),(2486, 1608),(2496, 1609),(2505, 1607),
+    # (2514, 1600),(2519, 1594),(2525, 1600),(2532, 1608),(2536, 1617),(2542, 1627),(2552, 1629),
+    # (2561, 1631),(2570, 1635),(2578, 1642),(2588, 1644),(2589, 1639),(2585, 1634),(2583, 1627),
+    # (2584, 1620),
+    # (2588, 1628),(2596, 1631),(2600, 1637),(2603, 1644),(2609, 1634),(2621, 1631),(2628, 1622),
+    # (2638, 1623),(2649, 1622),(2656, 1618),(2668, 1618),(2677, 1624),(2688, 1625),(2696, 1625),
+    # (2701, 1623),(2704, 1619),(2708, 1614),(2714, 1606),(2716, 1599),(2726, 1595),(2736, 1589),
+    # (2742, 1583),(2749, 1575),(2758, 1568),(2769, 1566),(2779, 1567),(2793, 1565),(2801, 1562),
+    # (2811, 1558),(2819, 1551),(2825, 1546),(2831, 1537),(2832, 1528),(2837, 1521),(2844, 1513),
+    # (2842, 1505),(2836, 1500),(2834, 1494),(2842, 1492),(2851, 1492),(2857, 1492),(2863, 1490),
+    # (2860, 1483),(2859, 1477),(2865, 1484),(2874, 1487),(2882, 1484),(2892, 1480),(2901, 1477),
+    # (2909, 1473),(2910, 1465),(2919, 1466),(2928, 1465),(2935, 1461),(2944, 1461),
+
+    # #2S to 32S
+    # (2955, 1460),(2967, 1458),(2977, 1453),(2985, 1446),(2993, 1440),(3003, 1434),(3013, 1434),
+    # (3022, 1426),(3024, 1415),(3026, 1402),(3024, 1390),(3019, 1382),(3012, 1373),(3005, 1366),
+    # (2997, 1358),(2992, 1348),(2986, 1339),(2976, 1330),(2975, 1319),(2975, 1307),(2975, 1295),
+    # (2973, 1284),(2970, 1274),(2966, 1263),(2963, 1251),(2958, 1241),(2952, 1231),(2948, 1220),
+    # (2939, 1212),(2928, 1210),(2917, 1208),(2907, 1208),(2900, 1200),(2890, 1198),(2879, 1193),
+    # (2871, 1185),(2864, 1176),(2860, 1163),(2860, 1152),(2860, 1140),(2853, 1132),(2846, 1125),
+    # (2842, 1115),(2837, 1106),(2831, 1097),       
+
+    # #32S to tip
+    # (2824, 1091),(2817, 1084),(2813, 1074),(2808, 1068),(2801, 1060),(2794, 1050),(2785, 1045),
+    # (2774, 1047),(2765, 1047),(2758, 1052),(2751, 1053),(2742, 1057),(2747, 1049),(2755, 1043),
+    # (2756, 1034),(2760, 1027),(2764, 1017),(2759, 1009),(2754, 1000),(2745, 993),(2734, 990),
+    # (2725, 987),(2715, 985),(2707, 985),(2700, 984),(2699, 977),(2696, 966),(2696, 956),(2687, 951),
+    # (2679, 950),(2670, 954),(2662, 954),(2663, 944),(2667, 934),(2666, 924),(2662, 913),(2659, 898),
+    # (2655, 886),(2644, 883),(2635, 876),(2634, 862),(2641, 855),(2652, 852),(2654, 839),(2648, 830),
+    # (2640, 825),(2633, 814),(2629, 801),(2622, 794),(2614, 786),(2616, 771),(2620, 759),(2621, 748),
+    # (2625, 735),(2631, 726),(2639, 718),(2646, 713),(2655, 709),(2663, 707),(2670, 708),(2680, 706),
+]
+points2list=points2list[2::3] #reduce number
+
+#now load data to run forward model, assumes matrix can fit in
+#memory (which it should), and make them into dictionaries that whose
+#key is (nxTo,nyTo)
+numTo=E['numTo'][:]
+nxFrom=E['nxFrom'][:]
+nyFrom=E['nyFrom'][:]
+nxTo=E['nxTo'][:]
+nyTo=E['nyTo'][:]
+
+#make dictionary of points in nxFrom,nyFrom in order to trim points2list
+pointsInE=set(zip(nxFrom,nyFrom))
+points2list=[p for p in points2list if p in pointsInE]
+
+#make dictionaries that quickly map from a given (nxFrom,nyFrom) to
+#all the places they could go, and how many go to each place
+nxTo=dict(zip(zip(nxFrom,nyFrom),nxTo))
+nyTo=dict(zip(zip(nxFrom,nyFrom),nyTo))
+numTo=dict(zip(zip(nxFrom,nyFrom),numTo))
+
+
+if __name__ == '__main__':
+
+    #now plot
+    figure(1,figsize=figsize)
+    clf()
+    style.use('ggplot')
+    
+    #make map that we will use through whole run
+    central_lon=0.5*(lonMin+lonMax)
+    central_lat=0.5*(latMin+latMax)
+    proj=ccrs.Orthographic(central_lon, central_lat)
+    ax1=subplot(1,1,1,projection=proj)
+    ax1.set_extent((lonMin,lonMax,latMin,latMax))
+    #ax1.coastlines()
+    ax1.add_feature(cartopy.feature.LAND,edgecolor='black')
+    ax1.gridlines(draw_labels=True)
+
+    #now loop through points and calculate mean ending and starting positions
+    startList=[]
+    endList=[]
+    distList=[]
+    for point in points2list:
+        startList.append(goodHabitat[point]) #starting point
+
+        #make list of lon/lat points that are destinations of point,
+        #with duplicate points so that there are numTo copies of each
+        #point. This could be done much faster with list
+        #comprehensions, but we won't be doing this for that many
+        #points, will we...
+        #NOTE WELL, THIS IS CORRECT EVEN THOUGH IT USES THE
+        #UN-WEIGHTED meanLonLat! SEE BELOW. 
+        latPoints=[]; lonPoints=[]
+        if len(nxTo[point])>0:
+            for n in range(len(nxTo[point])):
+                lonLat=goodHabitat[nxTo[point][n],nyTo[point][n]]
+                lonPoints=lonPoints+numTo[point][n]*[lonLat[0]]
+                latPoints=latPoints+numTo[point][n]*[lonLat[1]]
+
+            lonAve,latAve,Dist=avll.meanLonLat(lonPoints,latPoints)
+            endList.append((lonAve,latAve)) #mean location of to points
+            distList.append(Dist) #std of dispersal of final points, in km
+        else:
+            endList.append((nan,nan))
+            distList.append(nan)
+
+    #now draw arrows...
+    for n in range(len(endList)):
+        if isfinite(distList[n]):
+            arrow(startList[n][0],startList[n][1],
+                  endList[n][0]-startList[n][0],endList[n][1]-startList[n][1],
+                  transform=ccrs.PlateCarree(),color='k',ec='k',fc='k',linewidth=1.5,
+                  head_width=1/2.5)
+
+            if True: #draw STD circles
+                circle_points = geodesic.Geodesic().circle(lon=endList[n][0], lat=endList[n][1],
+                                                    radius=distList[n]*1e3, n_samples=30, endpoint=False)
+                geom = shapely.geometry.Polygon(circle_points)
+                ax1.add_geometries((geom,), crs=ccrs.PlateCarree(), facecolor='red',
+                                   edgecolor='none', linewidth=0,alpha=0.2)
+
+            #now calculate Lreten = Ldiff**2/Ladv or distList[n]**2/meanDist
+            meanDist=avll.haversine(startList[n][0],startList[n][1],endList[n][0],endList[n][1])#in km
+            Lreten=distList[n]**2/meanDist
+            text(startList[n][0],startList[n][1],' %4.0f'%(Lreten,),transform=ccrs.PlateCarree())
+
+    #now plot arrows
+
+    #now plot circles
+        
+    draw()
+    show()
+
+    tight_layout()
+    savefig('figMap.svg')
